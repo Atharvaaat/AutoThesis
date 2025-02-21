@@ -1,14 +1,13 @@
 import requests
 import json
 import time
+from tqdm import tqdm  # For progress bar
 
 # Ollama API Endpoint
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+MAX_RETRIES = 3
 
-# Model Name (Adjust as per your setup)
-MODEL_NAME = "llama3.2-vision"
-
-# Define an extended structure for the black book
+# Define sections
 sections = [
     "Introduction",
     "History & Evolution of Insurance",
@@ -31,62 +30,85 @@ sections = [
     "Conclusion & Recommendations"
 ]
 
-# Initialize an empty document
-document = ""
+# Model Name
+MODEL_NAME = "mistral"
 
-# Function to generate content using Ollama
-def generate_section_content(section_title, previous_content=""):
-    prompt = f"""
-    # Research Document: Exploring the Most Popular Types of Insurance People Choose Today
+def check_ollama_status():
+    try:
+        response = requests.get("http://127.0.0.1:11434/api/tags")
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
 
-    **Ensure at least 10+ pages of content for this section.**
-    
-    - **Use the following structure:**
-      - **Section Title (H1)**
-      - **Introduction to the Section (2 paragraphs)**
-      - **Key Concepts & Definitions**
-      - **Real-world Examples and Case Studies**
-      - **Statistical Data (if applicable)**
-      - **Challenges & Future Trends**
-      - **Summary & Key Takeaways**
-      
-    **Content generated so far:**  
-    {previous_content}
-    
-    Now, generate the next section:  
-    ## {section_title}
-    """
-
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "model": MODEL_NAME,
-        "prompt": prompt,
-        "stream": False
-    }
-
-    print(f"⏳ Generating: {section_title} ...")  # Status update
-
-    response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
-
-    if response.status_code == 200:
-        response_text = response.text
-        generated_text = json.loads(response_text).get("response", "")
-        return generated_text.strip()
-    else:
-        print(f"❌ Error generating {section_title}: {response.status_code}")
+def generate_section_content(section_title, previous_content="", retries=0):
+    if retries >= MAX_RETRIES:
+        print(f"❌ Failed to generate content for {section_title} after {MAX_RETRIES} attempts")
         return ""
 
-# Generate content for each section iteratively
-for section in sections:
-    section_content = generate_section_content(section, document)
-    document += f"\n\n## {section}\n{section_content}\n"
+    try:
+        prompt = f"""
+        # Research Document: Exploring the Most Popular Types of Insurance People Choose Today
+
+        **Ensure at least 10+ pages of content for this section.**
+        
+        - **Use the following structure:**
+          - **Section Title (H1)**
+          - **Introduction to the Section (2 paragraphs)**
+          - **Key Concepts & Definitions**
+          - **Real-world Examples and Case Studies**
+          - **Statistical Data (if applicable)**
+          - **Challenges & Future Trends**
+          - **Summary & Key Takeaways**
+          
+        **Content generated so far:**  
+        {previous_content}
+        
+        Now, generate the next section:  
+        ## {section_title}
+        """
+
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "model": MODEL_NAME,
+            "prompt": prompt,
+            "stream": False
+        }
+
+        response = requests.post(OLLAMA_URL, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+
+        generated_text = json.loads(response.text).get("response", "")
+        return generated_text.strip()
+
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+        print(f"⚠️ Attempt {retries + 1} failed for {section_title}: {str(e)}")
+        time.sleep(5)  # Wait before retry
+        return generate_section_content(section_title, previous_content, retries + 1)
+
+def main():
+    if not check_ollama_status():
+        print("❌ Ollama is not running or not accessible!")
+        return
+
+    document = ""
     
-    # Introduce a delay to prevent overloading the model
-    time.sleep(2)
+    # Use tqdm for progress tracking
+    for section in tqdm(sections, desc="Generating sections"):
+        section_content = generate_section_content(section, document)
+        if section_content:
+            document += f"\n\n## {section}\n{section_content}\n"
+            time.sleep(2)  # Rate limiting
+        else:
+            print(f"⚠️ Warning: No content generated for {section}")
 
-# Save the final document
-file_name = "Insurance_Research_Blackbook.txt"
-with open(file_name, "w", encoding="utf-8") as file:
-    file.write(document)
+    # Save the final document
+    file_name = "Insurance_Research_Blackbook.txt"
+    try:
+        with open(file_name, "w", encoding="utf-8") as file:
+            file.write(document)
+        print(f"✅ Document successfully generated and saved as '{file_name}'!")
+    except IOError as e:
+        print(f"❌ Error saving document: {str(e)}")
 
-print(f"✅ Document successfully generated and saved as '{file_name}'!")
+if __name__ == "__main__":
+    main()
